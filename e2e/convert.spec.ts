@@ -29,7 +29,7 @@ async function convertAndSave(page: Page, card: ReturnType<Page['locator']>) {
 
 test.beforeEach(async ({ page }) => {
   page.on('pageerror', (e) => console.error('pageerror:', e))
-  await page.goto('/')
+  await page.goto('./')
 })
 
 test('home page renders @mobile', async ({ page }) => {

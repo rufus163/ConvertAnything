@@ -57,9 +57,15 @@ npm run build        # production build in dist/
 npm run test:e2e     # browser tests against the build (Playwright)
 ```
 
-### Web
+### Web (GitHub Pages)
 
-`npm run build` outputs a static site in `dist/` that can be hosted anywhere. The included GitHub Actions workflow (`.github/workflows/pages.yml`) deploys it to GitHub Pages on every push to `main`. Enable it under *Settings › Pages › Source: GitHub Actions*. The ~32 MB media engine is downloaded only the first time someone converts audio or video, then cached for offline use.
+`npm run build` outputs a static site in `dist/` that can be hosted anywhere. The included workflow (`.github/workflows/pages.yml`) builds and deploys it to GitHub Pages on every push to the repository's default branch:
+
+1. In the repository, open *Settings › Pages* and set **Source** to **GitHub Actions**. Pages on a private repository requires a paid GitHub plan, and the published site is public either way.
+2. Push to the default branch, or run *Actions › Deploy web app › Run workflow*.
+3. The app is then live at `https://<user>.github.io/<repo>/`, e.g. `https://rufus163.github.io/ConvertAnything/`.
+
+On a Mac you can keep it in the Dock like a normal app: in Safari choose *File › Add to Dock*, or in Chrome choose *Install ConvertAnything* in the address bar. The ~32 MB media engine is downloaded the first time you convert audio or video, then cached for offline use.
 
 ### Windows (and macOS) desktop app
 
