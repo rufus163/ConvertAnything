@@ -1,10 +1,16 @@
 export type OptionValue = string | number | boolean
 export type Options = Record<string, OptionValue>
 
+/** Lossless keeps every bit it can; compact trades a little quality for size and speed. */
+export type QualityPreset = 'lossless' | 'balanced' | 'compact'
+export const QUALITY_PRESETS: QualityPreset[] = ['lossless', 'balanced', 'compact']
+
 interface BaseOption {
   key: string
   label: string
   help?: string
+  /** Value used for each quality preset; `default` is used for any preset not listed. */
+  presets?: Partial<Record<QualityPreset, OptionValue>>
 }
 
 export interface SelectOption extends BaseOption {
@@ -53,6 +59,8 @@ export interface ConvertContext {
   onProgress: (progress: number) => void
   /** Short human readable status ("Loading video engine…"). */
   onStatus: (status: string) => void
+  /** Engine-specific speed, e.g. "48 fps · 2.1× realtime". Replaces the generic MB/s figure. */
+  onSpeed?: (speed: string) => void
   signal: AbortSignal
 }
 
@@ -78,6 +86,8 @@ export interface Converter {
   minInputs?: number
   /** Shown first in pickers. */
   recommended?: boolean
+  /** What each quality preset means for this conversion, shown under the quality switch. */
+  presetNotes?: Partial<Record<QualityPreset, string>>
   run: (inputs: File[], options: Options, ctx: ConvertContext) => Promise<OutputFile[]>
 }
 

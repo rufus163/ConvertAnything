@@ -1,22 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSettings } from './settings'
 
 type Theme = 'light' | 'dark'
-const KEY = 'convertanything:theme'
-
-function stored(): Theme | null {
-  try {
-    const v = localStorage.getItem(KEY)
-    return v === 'light' || v === 'dark' ? v : null
-  } catch {
-    return null
-  }
-}
 
 const systemTheme = (): Theme => (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
 
-/** Follows the system theme until the user picks one explicitly. */
+/** Follows the system theme unless a theme is chosen in settings. */
 export function useTheme() {
-  const [override, setOverride] = useState<Theme | null>(stored)
+  const { settings, update } = useSettings()
   const [system, setSystem] = useState<Theme>(systemTheme)
 
   useEffect(() => {
@@ -26,22 +17,14 @@ export function useTheme() {
     return () => mq.removeEventListener('change', onChange)
   }, [])
 
-  const theme = override ?? system
+  const theme: Theme = settings.theme === 'system' ? system : settings.theme
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0b0b0f' : '#f5f5f7')
   }, [theme])
 
-  const toggle = useCallback(() => {
-    const next: Theme = theme === 'dark' ? 'light' : 'dark'
-    setOverride(next)
-    try {
-      localStorage.setItem(KEY, next)
-    } catch {
-      // Private mode: the choice just won't persist.
-    }
-  }, [theme])
+  const toggle = useCallback(() => update({ theme: theme === 'dark' ? 'light' : 'dark' }), [theme, update])
 
   return { theme, toggle }
 }

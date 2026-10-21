@@ -43,15 +43,21 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // The ffmpeg core (~32 MB) is cached on first use instead of precached.
+        // Large, rarely needed engines (ffmpeg core ~32 MB, HEIC decoder, font embedding) are cached
+        // on first use instead of being downloaded by every visitor up front.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest,mjs}'],
-        globIgnores: ['**/ffmpeg-core*'],
+        globIgnores: ['**/ffmpeg-core*', '**/heic2any*', '**/fontkit*'],
         maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.pathname.includes('ffmpeg-core'),
             handler: 'CacheFirst',
             options: { cacheName: 'ffmpeg-core', expiration: { maxEntries: 4 } },
+          },
+          {
+            urlPattern: ({ url }) => /\/assets\/(heic2any|fontkit)[^/]*\.js$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: { cacheName: 'lazy-engines', expiration: { maxEntries: 10 } },
           },
         ],
       },

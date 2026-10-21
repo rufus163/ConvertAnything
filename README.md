@@ -19,6 +19,28 @@ Every conversion runs locally, in the browser or app. Files are never uploaded, 
 
 That's 42 formats and about 390 input→output pairs. Most conversions have options: quality, size, resolution, page size, trimming, tracing detail, and so on.
 
+### Lossless, Balanced or Compact
+
+Every conversion where quality matters has a three-way switch (the default is set in Settings):
+
+- **Lossless** keeps the original wherever it can. Video and audio streams are *copied* when the target container supports them (instant, bit-perfect). Otherwise it uses a lossless codec: Apple Lossless (ALAC) for M4A, FLAC in MKV, lossless WebP, lossless H.264 in MKV, and 24-bit PCM for 24-bit sources. JPG and PNG images go into PDFs untouched. When the target format itself is lossy (JPG, MP3…), the app says so and uses its highest quality.
+- **Balanced** looks the same as the original for almost any file, at a much smaller size.
+- **Compact** gives the smallest files and fastest conversions.
+
+### PDF editor
+
+Open any PDF with **Edit PDF** (or the *Edit a PDF* shortcut):
+
+- Click any text to change it. The editor reads each line's **actual font** (from the fonts embedded in the PDF), **size**, **color** and position, so edits look like the original. When the PDF's font is missing a character you type (PDFs usually embed only the letters they use), only that character uses the closest standard font.
+- Change the font, size or color of a line, delete it, or switch to **Add text** and click anywhere to write something new.
+- Rotate or delete pages. Undo works with Ctrl/⌘+Z.
+- Scanned PDFs (pages that are just images) have no editable text; you can still add text to them.
+
+### Progress and settings
+
+- Each conversion shows **percentage, time left and speed**: frames per second and "× realtime" for video and audio, MB/s otherwise. Batches show overall progress.
+- **Settings** (gear icon) control the default quality, how many conversions run at once (and how many of them may be video/audio), a maximum file size, the maximum image size, freeing memory after saving, preloading the video engine, and the theme.
+
 ### Smart "iPhone compatible" video
 
 Videos that won't play on iOS are usually fine inside and just packaged wrong (for example HEVC tagged `hev1` instead of `hvc1`, or a `.mkv` container). ConvertAnything inspects the file first:
@@ -96,27 +118,29 @@ src/
   converters/
     formats.ts        format catalog and detection (extension + MIME)
     registry.ts       every conversion, its options, and target ranking
-    probe.ts          parses ffmpeg output and plans video/audio commands (pure, unit tested)
+    probe.ts          parses ffmpeg output and plans video/audio commands, incl. lossless stream copy (pure, unit tested)
     data.ts           CSV/TSV/JSON/YAML/XML/TOML conversions (pure, unit tested)
     encoders.ts       BMP and ICO writers (pure, unit tested)
     engines/          lazily-loaded engines:
       image.ts        canvas decode/encode, HEIC, TIFF, GIF, ICO, BMP, SVG tracing (in a worker)
-      media.ts        ffmpeg.wasm for all audio/video, streamed from disk via WORKERFS
+      media.ts        ffmpeg.wasm pool for all audio/video, streamed from disk via WORKERFS; idle engines are shut down to free memory
       pdf.ts          pdf-lib (create/merge/split) and pdf.js (render/extract text)
       pdfWriter.ts    small rich-text layout engine for Markdown/Word/text → PDF
+      pdfEdit.ts      PDF editor engine: reads fonts/sizes/colors with pdf.js, writes edits with pdf-lib + fontkit
       document.ts     Word, Markdown, HTML, text
       data.ts         adds Excel (.xlsx) on top of converters/data.ts
       archive.ts      ZIP / unzip
-  components/         UI (React)
-  lib/                job queue, saving/sharing per platform, theme
+  components/         UI (React); the PDF editor is loaded only when opened
+  lib/                job queue and scheduler, settings, saving/sharing per platform, theme
 ```
 
 Main libraries: [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [pdf-lib](https://pdf-lib.js.org), [pdf.js](https://mozilla.github.io/pdf.js/), [imagetracerjs](https://github.com/jankovicsandras/imagetracerjs), [heic2any](https://github.com/alexcorvi/heic2any), [UTIF.js](https://github.com/photopea/UTIF.js), [gifenc](https://github.com/mattdesl/gifenc), [mammoth](https://github.com/mwilliamson/mammoth.js), [marked](https://marked.js.org), [Turndown](https://github.com/mixmark-io/turndown), [Papa Parse](https://www.papaparse.com), [read-excel-file](https://gitlab.com/catamphetamine/read-excel-file) / [write-excel-file](https://gitlab.com/catamphetamine/write-excel-file), [js-yaml](https://github.com/nodeca/js-yaml), [fast-xml-parser](https://github.com/NaturalIntelligence/fast-xml-parser), [smol-toml](https://github.com/squirrelchat/smol-toml), [fflate](https://github.com/101arrowz/fflate).
 
 ## Limits and notes
 
-- **Large videos.** Video is encoded in WebAssembly on one CPU thread, so re-encoding is slower than a native app. Remuxing (the common iPhone case) is fast. Phones may run out of memory on multi-gigabyte files that need a full re-encode.
-- **Very large photos** are scaled down to 16 megapixels, which is iOS Safari's canvas limit.
+- **Large videos.** Each video engine runs WebAssembly on one CPU thread, so re-encoding is slower than a native app (Settings can run several at once). Copying streams (Lossless, and the common iPhone case) is fast. Phones may run out of memory on multi-gigabyte files that need a full re-encode.
+- **Very large photos** are scaled down to 16 megapixels by default (iOS Safari's canvas limit); on computers this can be raised to 64 MP in Settings.
+- **PDF editing** covers replaced text with its background color and draws the new text on top. The page looks right, but the old words are still in the file's data and can be found by search or copy-paste, so don't rely on it to redact sensitive information. Only horizontal, left-to-right text can be edited in place.
 - **Text → PDF** uses the standard PDF fonts, which cover Latin-1 text. Other scripts (CJK, emoji…) are replaced with `?`.
 - **Word → PDF** keeps headings, lists, emphasis, quotes and code, but not page layout or embedded images. Legacy `.doc` and `.xls` aren't supported; use `.docx` and `.xlsx`.
 - **AVIF output** isn't offered because most browsers, Safari included, can't encode it yet. AVIF input works where the device can display it.

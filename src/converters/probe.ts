@@ -3,7 +3,8 @@
 export interface ProbeResult {
   duration?: number
   video?: { codec: string; profile?: string; tag?: string; pixFmt?: string; width?: number; height?: number }
-  audio?: { codec: string }
+  /** `bits` is the sample depth when the source is 24-bit or more (for lossless output). */
+  audio?: { codec: string; bits?: number }
 }
 
 export function parseTimestamp(ts: string): number | undefined {
@@ -35,14 +36,17 @@ export function parseProbe(log: string): ProbeResult {
     }
     if (!result.audio) {
       const a = /Stream #\d+:\d+.*?: Audio: (\w+)/.exec(line)
-      if (a) result.audio = { codec: a[1] }
+      if (a) {
+        const deep = /\((2[4-9]|3\d) bit\)|, s(24|32)p?[,\s]|pcm_s(24|32)/.exec(line)
+        result.audio = { codec: a[1], bits: deep ? 24 : undefined }
+      }
     }
   }
   return result
 }
 
 export interface VideoPlanOptions {
-  quality: 'high' | 'balanced' | 'small'
+  quality: 'lossless' | 'high' | 'balanced' | 'small'
   /** Max long-edge size in pixels, 0 = keep. */
   maxSize: number
   mute: boolean
@@ -50,9 +54,27 @@ export interface VideoPlanOptions {
   forceEncode?: boolean
 }
 
-const CRF: Record<VideoPlanOptions['quality'], number> = { high: 20, balanced: 23, small: 28 }
-const PRESET: Record<VideoPlanOptions['quality'], string> = { high: 'faster', balanced: 'veryfast', small: 'veryfast' }
-const AUDIO_KBPS: Record<VideoPlanOptions['quality'], number> = { high: 192, balanced: 160, small: 96 }
+// "lossless" here is the visually lossless fallback used when a stream can't simply be copied.
+const CRF: Record<VideoPlanOptions['quality'], number> = { lossless: 12, high: 20, balanced: 23, small: 28 }
+const PRESET: Record<VideoPlanOptions['quality'], string> = { lossless: 'faster', high: 'faster', balanced: 'veryfast', small: 'veryfast' }
+const AUDIO_KBPS: Record<VideoPlanOptions['quality'], number> = { lossless: 256, high: 192, balanced: 160, small: 96 }
+
+/** Codecs each container can hold as-is, so "lossless" can copy instead of re-encoding. */
+const COPYABLE: Record<string, { video: string[] | '*'; audio: string[] | '*' }> = {
+  mp4: { video: ['h264', 'hevc', 'av1', 'mpeg4'], audio: ['aac', 'mp3', 'alac', 'ac3', 'eac3'] },
+  mov: { video: ['h264', 'hevc', 'mpeg4', 'prores', 'mjpeg'], audio: ['aac', 'mp3', 'alac', 'ac3', 'pcm_s16le', 'pcm_s24le', 'pcm_s16be', 'pcm_s24be'] },
+  mkv: { video: '*', audio: '*' },
+  webm: { video: ['vp8', 'vp9', 'av1'], audio: ['opus', 'vorbis'] },
+  avi: { video: ['mpeg4', 'h264', 'mjpeg', 'msmpeg4v3', 'mpeg2video'], audio: ['mp3', 'ac3', 'pcm_s16le'] },
+}
+
+export function canCopy(target: string, kind: 'video' | 'audio', codec: string | undefined): boolean {
+  const allowed = COPYABLE[target]?.[kind]
+  if (!allowed || !codec) return false
+  // GIF and raw images aren't real video streams for a container to carry.
+  if (kind === 'video' && ['gif', 'png', 'bmp', 'webp'].includes(codec)) return false
+  return allowed === '*' || allowed.includes(codec)
+}
 
 export function scaleFilter(maxSize: number, probe?: ProbeResult): string {
   const w = probe?.video?.width
@@ -125,6 +147,7 @@ export function planIosMp4(probe: ProbeResult, o: VideoPlanOptions): { args: str
 
 /** Arguments for converting video to a given container. */
 export function planVideo(target: string, probe: ProbeResult, o: VideoPlanOptions): string[] {
+  if (o.quality === 'lossless') return planLosslessVideo(target, probe, o)
   const noAudio = ['-an']
   const maps = ['-map', '0:v:0?', ...(o.mute ? [] : ['-map', '0:a:0?'])]
   const aac = ['-c:a', 'aac', '-b:a', `${AUDIO_KBPS[o.quality]}k`, '-ac', '2']
@@ -158,6 +181,46 @@ export function planVideo(target: string, probe: ProbeResult, o: VideoPlanOption
   }
 }
 
+/**
+ * Lossless: copy each stream untouched when the target container can hold it
+ * (instant, bit-perfect); otherwise use the best lossless or near-lossless codec.
+ */
+function planLosslessVideo(target: string, probe: ProbeResult, o: VideoPlanOptions): string[] {
+  const args = ['-map', '0:v:0?', ...(o.mute ? [] : ['-map', '0:a:0?'])]
+  const v = probe.video?.codec
+  if (canCopy(target, 'video', v) && !needsResize(o.maxSize, probe)) {
+    args.push('-c:v', 'copy')
+    if (v === 'hevc' && (target === 'mp4' || target === 'mov')) args.push('-tag:v', 'hvc1')
+  } else {
+    switch (target) {
+      case 'mkv':
+        // Mathematically lossless H.264.
+        args.push('-c:v', 'libx264', '-preset', 'veryfast', '-qp', '0', '-vf', scaleFilter(o.maxSize, probe))
+        break
+      case 'webm':
+        args.push('-c:v', 'libvpx-vp9', '-lossless', '1', '-deadline', 'realtime', '-cpu-used', '8', '-row-mt', '1', '-vf', scaleFilter(o.maxSize, probe))
+        break
+      case 'avi':
+        args.push('-c:v', 'mpeg4', '-q:v', '1', '-vf', scaleFilter(o.maxSize, probe))
+        break
+      default:
+        // MP4/MOV: visually lossless but still playable everywhere (true lossless H.264 isn't).
+        args.push(...x264Args(o, probe))
+    }
+  }
+
+  const a = probe.audio
+  if (o.mute || !a) args.push('-an')
+  else if (canCopy(target, 'audio', a.codec)) args.push('-c:a', 'copy')
+  else if (target === 'mkv') args.push('-c:a', 'flac')
+  else if (target === 'mp4' || target === 'mov') args.push('-c:a', 'alac')
+  else if (target === 'avi') args.push('-c:a', a.bits ? 'pcm_s24le' : 'pcm_s16le')
+  else args.push('-c:a', 'libopus', '-b:a', '256k')
+
+  if (target === 'mp4' || target === 'mov') args.push('-movflags', '+faststart')
+  return args
+}
+
 export function planGif(o: { fps: number; width: number }): string[] {
   const scale = o.width > 0 ? `scale='min(${o.width},iw)':-1:flags=lanczos,` : ''
   return [
@@ -167,19 +230,22 @@ export function planGif(o: { fps: number; width: number }): string[] {
   ]
 }
 
-export function planAudio(target: string, bitrate: number): string[] {
+export function planAudio(target: string, bitrate: number, opts: { codec?: string; bits?: number } = {}): string[] {
   const vn = ['-vn', '-map', '0:a:0']
+  // Keep 24-bit sources 24-bit in lossless PCM output.
+  const deep = (opts.bits ?? 16) >= 24
   switch (target) {
     case 'mp3':
       return [...vn, '-c:a', 'libmp3lame', '-b:a', `${bitrate}k`]
     case 'm4a':
+      if (opts.codec === 'alac') return [...vn, '-c:a', 'alac', '-movflags', '+faststart']
       return [...vn, '-c:a', 'aac', '-b:a', `${bitrate}k`, '-movflags', '+faststart']
     case 'm4r':
       return [...vn, '-c:a', 'aac', '-b:a', `${bitrate}k`, '-f', 'ipod']
     case 'wav':
-      return [...vn, '-c:a', 'pcm_s16le']
+      return [...vn, '-c:a', deep ? 'pcm_s24le' : 'pcm_s16le']
     case 'aiff':
-      return [...vn, '-c:a', 'pcm_s16be', '-f', 'aiff']
+      return [...vn, '-c:a', deep ? 'pcm_s24be' : 'pcm_s16be', '-f', 'aiff']
     case 'flac':
       return [...vn, '-c:a', 'flac']
     case 'ogg':

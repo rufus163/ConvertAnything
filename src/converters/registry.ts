@@ -1,5 +1,5 @@
 import { detectFormat, FORMATS } from './formats'
-import type { Converter, ConvertContext, OptionDef, Options, OutputFile } from './types'
+import type { Converter, ConvertContext, OptionDef, Options, OutputFile, QualityPreset } from './types'
 
 // Engines are imported lazily so the first page load stays small.
 const image = () => import('./engines/image')
@@ -35,7 +35,17 @@ const resize: OptionDef = {
     { value: '25%', label: '25%' },
   ],
 }
-const quality: OptionDef = { type: 'range', key: 'quality', label: 'Quality', min: 10, max: 100, step: 5, default: 90, unit: '%' }
+const quality: OptionDef = {
+  type: 'range',
+  key: 'quality',
+  label: 'Quality',
+  min: 10,
+  max: 100,
+  step: 5,
+  default: 90,
+  unit: '%',
+  presets: { lossless: 100, balanced: 90, compact: 75 },
+}
 const background: OptionDef = { type: 'color', key: 'background', label: 'Background', default: '#ffffff', help: 'Fills transparent areas' }
 const svgScale: OptionDef = {
   type: 'select',
@@ -63,22 +73,25 @@ const pageSize = (withFit: boolean): OptionDef => ({
 })
 const fontSize: OptionDef = { type: 'range', key: 'fontSize', label: 'Text size', min: 8, max: 18, step: 1, default: 11, unit: 'pt' }
 
-const videoQuality = (def: string): OptionDef => ({
+const videoQuality = (def: string, presets: OptionDef['presets'] = { lossless: 'lossless', balanced: def, compact: 'small' }): OptionDef => ({
   type: 'select',
   key: 'quality',
-  label: 'Quality',
+  label: 'Encoding',
   default: def,
+  presets,
   choices: [
+    { value: 'lossless', label: 'Lossless / original streams' },
     { value: 'high', label: 'High' },
     { value: 'balanced', label: 'Balanced' },
     { value: 'small', label: 'Smallest file' },
   ],
 })
-const maxSize = (def: string): OptionDef => ({
+const maxSize = (def: string, presets?: OptionDef['presets']): OptionDef => ({
   type: 'select',
   key: 'maxSize',
   label: 'Resolution',
   default: def,
+  presets,
   choices: [
     { value: '0', label: 'Original' },
     { value: '3840', label: '4K' },
@@ -88,12 +101,13 @@ const maxSize = (def: string): OptionDef => ({
   ],
 })
 const mute: OptionDef = { type: 'toggle', key: 'mute', label: 'Remove audio', default: false }
-const bitrate = (def: string): OptionDef => ({
+const bitrate = (def: string, presets: OptionDef['presets'] = { lossless: '320', compact: '128' }): OptionDef => ({
   type: 'select',
   key: 'bitrate',
   label: 'Bitrate',
   default: def,
-  choices: ['96', '128', '192', '256', '320'].map((v) => ({ value: v, label: `${v} kbps` })),
+  presets,
+  choices: ['64', '96', '128', '192', '256', '320'].map((v) => ({ value: v, label: `${v} kbps` })),
 })
 const start: OptionDef = { type: 'number', key: 'start', label: 'Start at', min: 0, step: 0.5, default: 0, unit: 's' }
 const duration = (def: number, help?: string): OptionDef => ({ type: 'number', key: 'duration', label: 'Length', min: 0, step: 0.5, default: def, unit: 's', help: help ?? '0 = until the end' })
@@ -159,6 +173,11 @@ function imageOptions(to: string, from: string[]): OptionDef[] {
   return opts
 }
 
+const IMAGE_PRESET_NOTES: Record<string, Converter['presetNotes']> = {
+  jpg: { lossless: 'Maximum JPG quality. JPG is always slightly lossy; choose PNG or WebP for a perfect copy.', balanced: 'Visually identical, much smaller', compact: 'Smallest JPG; fine detail may soften' },
+  webp: { lossless: 'True lossless WebP, pixel-perfect', balanced: 'Visually identical, much smaller', compact: 'Smallest WebP' },
+}
+
 const imageConverters: Converter[] = IMAGE_OUT.map((to) => {
   const from = IMAGE_IN.filter((f) => f !== to && !(to === 'svg' && f === 'svg'))
   return {
@@ -168,6 +187,7 @@ const imageConverters: Converter[] = IMAGE_OUT.map((to) => {
     engine: 'image',
     mode: 'each',
     options: imageOptions(to, IMAGE_IN),
+    presetNotes: IMAGE_PRESET_NOTES[to],
     run: each(async (f, o, c) => (await image()).convertImage(f, to, o, c)),
   } satisfies Converter
 })
@@ -182,7 +202,12 @@ const pdfConverters: Converter[] = [
     engine: 'pdf',
     mode: 'combine',
     recommended: true,
-    options: [pageSize(true), resize],
+    options: [pageSize(true), { ...quality, label: 'Image quality' }, { ...resize, presets: { compact: '1920' } }],
+    presetNotes: {
+      lossless: 'Images are placed unchanged; JPG and PNG are never re-encoded',
+      balanced: 'JPG/PNG unchanged, other formats compressed',
+      compact: 'Everything compressed and scaled to 1920 px: smallest PDF',
+    },
     run: async (files, o, c) => (await pdf()).imagesToPdf(files, o, c),
   },
   ...(['jpg', 'png'] as const).map(
@@ -201,10 +226,13 @@ const pdfConverters: Converter[] = [
           key: 'dpi',
           label: 'Resolution',
           default: '150',
+          presets: { lossless: '300', compact: '96' },
           choices: [
             { value: '72', label: 'Screen (72 dpi)' },
+            { value: '96', label: 'Web (96 dpi)' },
             { value: '150', label: 'Standard (150 dpi)' },
             { value: '300', label: 'Print (300 dpi)' },
+            { value: '600', label: 'High-res print (600 dpi)' },
           ],
         },
         {
@@ -255,6 +283,14 @@ const pdfConverters: Converter[] = [
   },
 ]
 
+const LOSSLESS_FALLBACK: Record<string, string> = {
+  mp4: 'visually lossless H.264 that plays everywhere',
+  mov: 'visually lossless H.264 that plays everywhere',
+  mkv: 'mathematically lossless H.264 (large)',
+  webm: 'lossless VP9 (slow, large)',
+  avi: 'near-lossless MPEG-4',
+}
+
 const videoConverters: Converter[] = [
   {
     id: 'video-ios',
@@ -265,6 +301,11 @@ const videoConverters: Converter[] = [
     engine: 'video',
     mode: 'each',
     recommended: true,
+    presetNotes: {
+      lossless: 'Copies the original video when the iPhone can play it; otherwise near-lossless H.264',
+      balanced: 'Copies when possible; otherwise high-quality H.264',
+      compact: 'Copies when possible; otherwise smaller, faster H.264',
+    },
     options: [
       videoQuality('balanced'),
       maxSize('0'),
@@ -281,7 +322,8 @@ const videoConverters: Converter[] = [
     description: 'Shrink a video for sharing or email',
     engine: 'video',
     mode: 'each',
-    options: [videoQuality('small'), maxSize('1280'), mute],
+    options: [videoQuality('small', { lossless: 'high', balanced: 'balanced', compact: 'small' }), maxSize('1280', { lossless: '1920', balanced: '1280', compact: '854' }), mute],
+    presetNotes: { lossless: 'Light compression at 1080p', balanced: 'Good quality at 720p', compact: 'Smallest at 480p' },
     run: each(async (f, o, c) => (await media()).convertMedia(f, 'mp4', 'video', o, c, '-small')),
   },
   ...['mov', 'webm', 'mkv', 'avi'].map(
@@ -292,6 +334,10 @@ const videoConverters: Converter[] = [
       engine: 'video',
       mode: 'each',
       options: [videoQuality('balanced'), maxSize('0'), mute],
+      presetNotes: {
+        lossless: `Copies the original streams when possible (instant, perfect); otherwise ${LOSSLESS_FALLBACK[to]}`,
+        compact: 'Smaller file, faster encode',
+      },
       run: each(async (f, o, c) => (await media()).convertMedia(f, to, 'video', o, c)),
     }),
   ),
@@ -309,9 +355,10 @@ const videoConverters: Converter[] = [
         key: 'width',
         label: 'Width',
         default: '480',
+        presets: { lossless: '640', compact: '320' },
         choices: ['240', '320', '480', '640', '800'].map((v) => ({ value: v, label: `${v} px` })),
       },
-      { type: 'range', key: 'fps', label: 'Frame rate', min: 5, max: 30, step: 1, default: 12, unit: 'fps' },
+      { type: 'range', key: 'fps', label: 'Frame rate', min: 5, max: 30, step: 1, default: 12, unit: 'fps', presets: { lossless: 15, compact: 10 } },
       start,
       duration(10),
     ],
@@ -327,6 +374,7 @@ const videoConverters: Converter[] = [
       engine: 'video',
       mode: 'each',
       options: [videoQuality('balanced')],
+      presetNotes: { lossless: 'Every frame kept exactly (larger file)' },
       run: each(async (f, o, c) => (await media()).convertMedia(f, to, 'video', { ...o, mute: true }, c)),
     }),
   ),
@@ -335,7 +383,20 @@ const videoConverters: Converter[] = [
 const audioConverters: Converter[] = AUDIO_OUT.map((to): Converter => {
   const lossless = ['wav', 'flac', 'aiff'].includes(to)
   const options: OptionDef[] = []
-  if (!lossless) options.push(bitrate(to === 'opus' ? '128' : to === 'm4r' ? '256' : '192'))
+  if (to === 'm4a') {
+    options.push({
+      type: 'select',
+      key: 'codec',
+      label: 'Codec',
+      default: 'aac',
+      presets: { lossless: 'alac' },
+      choices: [
+        { value: 'aac', label: 'AAC (small)' },
+        { value: 'alac', label: 'Apple Lossless (ALAC)' },
+      ],
+    })
+  }
+  if (!lossless) options.push(bitrate(to === 'opus' ? '128' : to === 'm4r' ? '256' : '192', to === 'opus' ? { lossless: '256', compact: '64' } : undefined))
   if (to === 'm4r') options.push(start, duration(30, 'iPhone ringtones can be up to 40 s'))
   return {
     id: `audio-${to}`,
@@ -346,6 +407,11 @@ const audioConverters: Converter[] = AUDIO_OUT.map((to): Converter => {
     mode: 'each',
     recommended: to === 'mp3',
     options,
+    presetNotes: lossless
+      ? undefined
+      : to === 'm4a'
+        ? { lossless: 'Apple Lossless: bit-perfect, plays on every Apple device', balanced: 'AAC 192 kbps', compact: 'AAC 128 kbps' }
+        : { lossless: `Highest ${FORMATS[to].label} bitrate. ${FORMATS[to].label} is lossy; choose FLAC, WAV or M4A (ALAC) for a perfect copy.`, balanced: 'Transparent for most listeners', compact: 'Smaller file' },
     run: each(async (f, o, c) => (await media()).convertMedia(f, to, 'audio', o, c)),
   }
 })
@@ -488,6 +554,18 @@ export function converterLabel(c: Converter): string {
   return c.label ?? FORMATS[c.to]?.label ?? c.to
 }
 
-export function defaultOptions(c: Converter): Options {
-  return Object.fromEntries((c.options ?? []).map((o) => [o.key, o.default]))
+export function defaultOptions(c: Converter, preset: QualityPreset = 'balanced'): Options {
+  return Object.fromEntries((c.options ?? []).map((o) => [o.key, o.presets?.[preset] ?? o.default]))
+}
+
+/** Whether the quality switch changes anything for this conversion. */
+export function hasPresets(c: Converter): boolean {
+  return (c.options ?? []).some((o) => o.presets)
+}
+
+/** Applies a preset to existing options, keeping choices the preset doesn't control. */
+export function applyPreset(c: Converter, options: Options, preset: QualityPreset): Options {
+  const out = { ...options }
+  for (const o of c.options ?? []) if (o.presets) out[o.key] = o.presets[preset] ?? o.default
+  return out
 }

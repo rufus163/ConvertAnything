@@ -15,7 +15,8 @@
     <script>
       // Apply the saved theme before first paint to avoid a flash.
       try {
-        var t = localStorage.getItem('convertanything:theme')
+        var s = JSON.parse(localStorage.getItem('convertanything:settings') || '{}')
+        var t = s.theme || localStorage.getItem('convertanything:theme')
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t
         else if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark'
       } catch (e) {}

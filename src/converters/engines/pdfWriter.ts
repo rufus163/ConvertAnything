@@ -1,5 +1,6 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from 'pdf-lib'
 import { marked, type Token, type Tokens } from 'marked'
+import { toWinAnsi as sanitize } from './winAnsi'
 
 // A small rich-text layout engine on top of pdf-lib: paragraphs, headings,
 // lists, quotes, code blocks and bold/italic/code runs, with word wrapping and
@@ -25,21 +26,6 @@ interface Block {
   indent?: number
   bullet?: string
   quote?: boolean
-}
-
-// Standard PDF fonts only cover WinAnsi; replace anything else so encoding never throws.
-const WIN_ANSI_EXTRA = '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'
-function sanitize(text: string): string {
-  return text
-    .replace(/\t/g, '    ')
-    .replace(/[‘’]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[•●]/g, '•')
-    .replace(/./gu, (ch) => {
-      const code = ch.codePointAt(0)!
-      if ((code >= 0x20 && code <= 0x7e) || (code >= 0xa0 && code <= 0xff) || WIN_ANSI_EXTRA.includes(ch)) return ch
-      return '?'
-    })
 }
 
 function inlineRuns(tokens: Token[] | undefined, font: FontKey = 'regular'): Run[] {

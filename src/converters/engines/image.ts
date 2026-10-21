@@ -1,9 +1,16 @@
 import { baseName, detectFormat, FORMATS } from '../formats'
 import { encodeBmp, encodeIco, resizeDimensions } from '../encoders'
+import { getSettings } from '../../lib/settings'
 import { ConversionError, type ConvertContext, type Options, type OutputFile } from '../types'
 
-// iOS Safari refuses to allocate canvases larger than ~16.7 megapixels.
-const MAX_CANVAS_PIXELS = 16_000_000
+// Configurable in settings; iOS Safari refuses canvases above ~16.7 megapixels.
+const maxCanvasPixels = () => getSettings().maxImageMegapixels * 1_000_000
+
+/** Frees a canvas's pixel memory now instead of whenever GC runs (matters a lot on iOS). */
+export function releaseCanvas(canvas: HTMLCanvasElement) {
+  canvas.width = 0
+  canvas.height = 0
+}
 
 export interface Decoded {
   canvas: HTMLCanvasElement
@@ -26,8 +33,9 @@ function context2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 
 function clampToCanvasLimit({ width, height }: { width: number; height: number }) {
   const pixels = width * height
-  if (pixels <= MAX_CANVAS_PIXELS) return { width, height }
-  const scale = Math.sqrt(MAX_CANVAS_PIXELS / pixels)
+  const max = maxCanvasPixels()
+  if (pixels <= max) return { width, height }
+  const scale = Math.sqrt(max / pixels)
   return { width: Math.floor(width * scale), height: Math.floor(height * scale) }
 }
 
@@ -145,6 +153,7 @@ export async function decodeImage(file: File, opts: Options, ctx: ConvertContext
   const g = context2d(canvas)
   g.imageSmoothingQuality = 'high'
   g.drawImage(decoded.canvas, 0, 0, target.width, target.height)
+  releaseCanvas(decoded.canvas)
   return { canvas, width: target.width, height: target.height }
 }
 
@@ -199,6 +208,7 @@ async function encodeIcoFile(canvas: HTMLCanvasElement, sizesOpt: string): Promi
     const h = Math.round(canvas.height * scale)
     g.drawImage(canvas, Math.floor((size - w) / 2), Math.floor((size - h) / 2), w, h)
     const png = new Uint8Array(await (await canvasToBlob(c, 'image/png')).arrayBuffer())
+    releaseCanvas(c)
     images.push({ size, png })
   }
   return new Blob([encodeIco(images) as BlobPart], { type: 'image/x-icon' })
@@ -250,8 +260,14 @@ export async function encodeCanvas(canvas: HTMLCanvasElement, target: string, op
   switch (target) {
     case 'png':
       return canvasToBlob(canvas, 'image/png')
-    case 'jpg':
-      return canvasToBlob(flatten(canvas, String(opts.background ?? '#ffffff')), 'image/jpeg', quality)
+    case 'jpg': {
+      const flat = flatten(canvas, String(opts.background ?? '#ffffff'))
+      try {
+        return await canvasToBlob(flat, 'image/jpeg', quality)
+      } finally {
+        releaseCanvas(flat)
+      }
+    }
     case 'webp':
       try {
         return await canvasToBlob(canvas, 'image/webp', quality)
@@ -290,7 +306,12 @@ export async function convertImage(file: File, target: string, opts: Options, ct
   const { canvas } = await decodeImage(file, effective, ctx)
   ctx.onProgress(0.5)
   ctx.onStatus('Encoding…')
-  const blob = await encodeCanvas(canvas, target, opts, ctx)
+  let blob: Blob
+  try {
+    blob = await encodeCanvas(canvas, target, opts, ctx)
+  } finally {
+    releaseCanvas(canvas)
+  }
   ctx.onProgress(1)
   return [{ name: `${baseName(file.name)}.${FORMATS[target].extensions[0]}`, blob }]
 }

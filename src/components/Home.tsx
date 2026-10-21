@@ -15,6 +15,7 @@ export const POPULAR: Shortcut[] = [
   { label: 'PNG → SVG', from: ['png'], converter: 'image-svg' },
   { label: 'Images → PDF', from: ['png', 'jpg', 'heic', 'webp'], converter: 'image-pdf' },
   { label: 'PDF → JPG', from: ['pdf'], converter: 'pdf-jpg' },
+  { label: 'Edit a PDF', from: ['pdf'], converter: 'edit-pdf' },
   { label: 'Merge PDFs', from: ['pdf'], converter: 'pdf-merge' },
   { label: 'MP4 → MP3', from: ['mp4', 'mov', 'webm', 'mkv'], converter: 'audio-mp3' },
   { label: 'Video → GIF', from: ['mp4', 'mov', 'webm'], converter: 'video-gif' },
