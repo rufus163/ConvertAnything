@@ -1,0 +1,26 @@
+name: iOS app
+
+# Compiles the iOS app for the simulator to make sure the Xcode project builds.
+# Signing and App Store upload need your Apple Developer account; see README.
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', 'capacitor.config.ts', 'package.json', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run ios:sync
+      - name: Build for simulator
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build

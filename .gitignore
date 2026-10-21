@@ -1,0 +1,14 @@
+node_modules
+dist
+dev-dist
+coverage
+test-results
+playwright-report
+*.local
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# Tauri
+src-tauri/target
+src-tauri/gen/schemas
