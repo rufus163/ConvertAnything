@@ -5,6 +5,7 @@ import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/displa
 import type { PageViewport } from 'pdfjs-dist/types/src/display/page_viewport'
 import type { PDFDocument as PdfLibDocument, PDFFont } from 'pdf-lib'
 import { ConversionError } from '../types'
+import { removeText, type RemovalTarget } from './pdfContent'
 import { toWinAnsi } from './winAnsi'
 
 export type RGB = [number, number, number]
@@ -73,10 +74,15 @@ export const STANDARD_FONTS = ['Helvetica', 'Times', 'Courier'] as const
 
 // ---------- Loading ----------
 
-export async function openPdfForEditing(file: File): Promise<{ pdf: PDFDocumentProxy; close: () => Promise<void> }> {
+async function loadPdfJs() {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const worker = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default
+  return pdfjs
+}
+
+export async function openPdfForEditing(file: File): Promise<{ pdf: PDFDocumentProxy; close: () => Promise<void> }> {
+  const pdfjs = await loadPdfJs()
   // fontExtraProperties keeps each font's name, style flags and program available after rendering.
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()), fontExtraProperties: true })
   try {
@@ -279,6 +285,8 @@ export function cssFontFamily(font: FontInfo | undefined): string {
 export interface SaveReport {
   edited: number
   exactFont: number
+  /** Lines whose original text couldn't be removed from the file (e.g. drawn inside a graphic), so it was covered instead. */
+  covered: number
   /** Edits where some characters used a standard font because the original (subset) font lacks them. */
   substituted: string[]
 }
@@ -365,18 +373,39 @@ export async function saveEditedPdf(
     return { pieces, spaceWidth, usesOwn: Boolean(own) && missing < [...text].filter((c) => !/\s/.test(c)).length, missing, hadOwn: Boolean(own) }
   }
 
-  const report: SaveReport = { edited: 0, exactFont: 0, substituted: [] }
+  const report: SaveReport = { edited: 0, exactFont: 0, substituted: [], covered: 0 }
   const pages = doc.getPages()
-
-  for (const edit of Object.values(state.edits)) {
-    const page = pages[edit.page]
-    if (!page) continue
+  const edits = Object.values(state.edits).filter((edit) => {
+    if (!pages[edit.page]) return false
     const run = edit.runId ? runs.get(edit.runId) : undefined
-    const changed = !run || edit.deleted || edit.text !== run.text || edit.size !== run.size || edit.font !== run.font || edit.color.some((v, i) => Math.abs(v - run.color[i]) > 0.01)
-    if (!changed) continue
+    return !run || edit.deleted || edit.text !== run.text || edit.size !== run.size || edit.font !== run.font || edit.color.some((v, i) => Math.abs(v - run.color[i]) > 0.01)
+  })
+
+  // 1. Take the original text out of each page's content, so it's replaced rather than hidden.
+  const targets = new Map<number, RemovalTarget[]>()
+  for (const edit of edits) {
+    const run = edit.runId ? runs.get(edit.runId) : undefined
+    if (!run) continue
+    targets.set(edit.page, [...(targets.get(edit.page) ?? []), { id: run.id, x: run.x, y: run.y, angle: run.angle, width: run.width, size: run.size }])
+  }
+  for (const [index, list] of targets) {
+    try {
+      removeText(doc, pages[index], list)
+    } catch {
+      // Unreadable content: the check below falls back to covering.
+    }
+  }
+  // 2. Check the result the way a viewer sees it. Text that's still there (inside a graphic,
+  //    or in a font encoding we can't decode) gets covered instead, so no edit is half-done.
+  const remaining = targets.size ? await findRemainingText(await doc.save(), targets) : new Set<string>()
+
+  for (const edit of edits) {
+    const page = pages[edit.page]
+    const run = edit.runId ? runs.get(edit.runId) : undefined
     report.edited++
 
-    if (run) {
+    if (run && remaining.has(run.id)) {
+      report.covered++
       // Cover the original text with its own background color.
       const pad = run.size * 0.08
       const ux = Math.cos(run.angle)
@@ -418,4 +447,38 @@ export async function saveEditedPdf(
     if (doc.getPageCount() > 1) doc.removePage(index)
   }
   return { bytes: await doc.save(), report }
+}
+
+/** Ids of targets that pdf.js still finds text in after removal. */
+async function findRemainingText(bytes: Uint8Array, targets: Map<number, RemovalTarget[]>): Promise<Set<string>> {
+  const remaining = new Set<string>()
+  const pdfjs = await loadPdfJs()
+  const task = pdfjs.getDocument({ data: bytes })
+  try {
+    const pdf = await task.promise
+    for (const [index, list] of targets) {
+      const content = await (await pdf.getPage(index + 1)).getTextContent()
+      for (const raw of content.items) {
+        if (!('str' in raw) || !raw.str.trim()) continue
+        const [a, b, c, d, e, f] = raw.transform
+        const size = Math.hypot(c, d) || Math.hypot(a, b)
+        const angle = Math.atan2(b, a)
+        for (const t of list) {
+          if (remaining.has(t.id) || Math.abs(angle - t.angle) > 0.05 || Math.abs(size - t.size) > 0.3 * t.size) continue
+          const ux = Math.cos(t.angle)
+          const uy = Math.sin(t.angle)
+          const along = (e - t.x) * ux + (f - t.y) * uy
+          const across = -(e - t.x) * uy + (f - t.y) * ux
+          const mid = along + raw.width / 2
+          if (Math.abs(across) <= 0.45 * t.size && mid >= -0.25 * t.size && mid <= t.width + 0.25 * t.size) remaining.add(t.id)
+        }
+      }
+    }
+  } catch {
+    // If the check itself fails, play safe and cover everything.
+    for (const list of targets.values()) for (const t of list) remaining.add(t.id)
+  } finally {
+    await task.destroy()
+  }
+  return remaining
 }

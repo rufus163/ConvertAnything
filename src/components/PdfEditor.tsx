@@ -336,8 +336,7 @@ export default function PdfEditor({ file, initial, onClose, onSaved }: Props) {
           <span>
             {mode === 'add'
               ? 'Click anywhere on a page to add text.'
-              : 'Click any text to change it. Edits keep the document’s own font, size and color where possible.'}{' '}
-            <span className="muted">Replaced text is covered on the page; the original may still be found by search or copy.</span>
+              : 'Click any text to change it. Edits replace the original text and keep the document’s own font, size and color where possible.'}
           </span>
           <button type="button" className="icon-btn" onClick={() => setShowHelp(false)} aria-label="Hide tip">
             <Icon name="x" size={16} />

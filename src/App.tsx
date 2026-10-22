@@ -24,6 +24,7 @@ function editNote(report: SaveReport): string {
   if (!report.edited) return 'Pages updated'
   const parts = [`${report.edited} edit${report.edited === 1 ? '' : 's'}`]
   if (report.exactFont) parts.push(`${report.exactFont} in the original font`)
+  if (report.covered) parts.push(`${report.covered} covered instead of removed (text inside a graphic or an unusual font)`)
   if (report.substituted.length) parts.push(`${report.substituted.length} with some characters in the closest standard font (the original font doesn't include them)`)
   return parts.join(', ')
 }

@@ -149,6 +149,9 @@ test.describe('PDF editor', () => {
     const [text] = await pdfText(out.bytes)
     expect(text).toContain('World Hello')
     expect(text).toContain('Invoice total')
+    // The original words are gone from the file, not just hidden.
+    expect(text).not.toContain('Hello World')
+    expect(text.match(/Hello/g)).toHaveLength(1)
   })
 
   test('falls back to a standard font, adds text, rotates and deletes pages', async ({ page }) => {
@@ -179,6 +182,22 @@ test.describe('PDF editor', () => {
     const [text] = await pdfText(out.bytes)
     expect(text).toContain('Changed text')
     expect(text).toContain('Signed')
+    expect(text).not.toContain('Hello from page 1')
+    await expect(card).not.toContainText('covered')
+  })
+
+  test('covers text it can’t remove (inside an embedded graphic)', async ({ page }) => {
+    await addFiles(page, 'xobject-text.pdf')
+    const card = page.locator('.job').first()
+    await card.getByRole('button', { name: 'Edit PDF' }).click()
+    const editor = page.getByRole('dialog', { name: 'Edit xobject-text.pdf' })
+    await editor.getByRole('button', { name: 'Edit text: Inside a graphic' }).click()
+    await editor.getByRole('textbox', { name: 'Text' }).fill('Replaced')
+    await editor.getByRole('button', { name: 'Save PDF' }).click()
+    await expect(card).toHaveClass(/job--done/)
+    await expect(card).toContainText('1 covered instead of removed')
+    const out = await download(page, card.getByRole('button', { name: /^Save/ }).first())
+    expect((await pdfText(out.bytes))[0]).toContain('Replaced')
   })
 
   test('“Edit a PDF” shortcut opens the editor directly', async ({ page }) => {

@@ -31,7 +31,7 @@ Every conversion where quality matters has a three-way switch (the default is se
 
 Open any PDF with **Edit PDF** (or the *Edit a PDF* shortcut):
 
-- Click any text to change it. The editor reads each line's **actual font** (from the fonts embedded in the PDF), **size**, **color** and position, so edits look like the original. When the PDF's font is missing a character you type (PDFs usually embed only the letters they use), only that character uses the closest standard font.
+- Click any text to change it. The original text is **removed from the file and replaced**, not just painted over. The editor reads each line's **actual font** (from the fonts embedded in the PDF), **size**, **color** and position, so edits look like the original. When the PDF's font is missing a character you type (PDFs usually embed only the letters they use), only that character uses the closest standard font.
 - Change the font, size or color of a line, delete it, or switch to **Add text** and click anywhere to write something new.
 - Rotate or delete pages. Undo works with Ctrl/⌘+Z.
 - Scanned PDFs (pages that are just images) have no editable text; you can still add text to them.
@@ -127,6 +127,7 @@ src/
       pdf.ts          pdf-lib (create/merge/split) and pdf.js (render/extract text)
       pdfWriter.ts    small rich-text layout engine for Markdown/Word/text → PDF
       pdfEdit.ts      PDF editor engine: reads fonts/sizes/colors with pdf.js, writes edits with pdf-lib + fontkit
+      pdfContent.ts   content-stream reader/rewriter that removes the original glyphs being replaced
       document.ts     Word, Markdown, HTML, text
       data.ts         adds Excel (.xlsx) on top of converters/data.ts
       archive.ts      ZIP / unzip
@@ -140,7 +141,7 @@ Main libraries: [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm), [pdf-l
 
 - **Large videos.** Each video engine runs WebAssembly on one CPU thread, so re-encoding is slower than a native app (Settings can run several at once). Copying streams (Lossless, and the common iPhone case) is fast. Phones may run out of memory on multi-gigabyte files that need a full re-encode.
 - **Very large photos** are scaled down to 16 megapixels by default (iOS Safari's canvas limit); on computers this can be raised to 64 MP in Settings.
-- **PDF editing** covers replaced text with its background color and draws the new text on top. The page looks right, but the old words are still in the file's data and can be found by search or copy-paste, so don't rely on it to redact sensitive information. Only horizontal, left-to-right text can be edited in place.
+- **PDF editing** removes the original text from the page's content and writes the new text in its place, so the old words are really gone (not just hidden). After saving, the app re-reads the file to check; text it can't remove (drawn inside an embedded graphic, or in an unusual font encoding) is covered with its background color instead, and the result says so. In that case the old words remain in the file's data, so check before relying on it to redact sensitive information. Only horizontal, left-to-right text can be edited in place.
 - **Text → PDF** uses the standard PDF fonts, which cover Latin-1 text. Other scripts (CJK, emoji…) are replaced with `?`.
 - **Word → PDF** keeps headings, lists, emphasis, quotes and code, but not page layout or embedded images. Legacy `.doc` and `.xls` aren't supported; use `.docx` and `.xlsx`.
 - **AVIF output** isn't offered because most browsers, Safari included, can't encode it yet. AVIF input works where the device can display it.
